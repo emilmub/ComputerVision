@@ -1,4 +1,5 @@
 import numpy as np
+import scipy
 from PIL import Image
 
 # Function to read image from file
@@ -14,86 +15,50 @@ def write_image(data, filename):
 # Function to apply Gaussian filter
 def gaussian_filter(data, sigma):
     size = int(3 * sigma)
-    kernel = np.zeros((2 * size + 1, 2 * size + 1))
-    for i in range(-size, size + 1):
-        for j in range(-size, size + 1):
-            kernel[i + size, j + size] = np.exp(-(i**2 + j**2) / (2 * sigma**2))
+    x = np.arange(-size, size + 1)
+    kernel = np.exp(-(x**2) / (2 * sigma**2))
+    kernel = kernel[:, None] * kernel[None, :]
     kernel = kernel / np.sum(kernel)
     
-    result = np.zeros(data.shape)
-    for i in range(data.shape[0]):
-        for j in range(data.shape[1]):
-            for k in range(-size, size + 1):
-                for idx in range(-size, size + 1):
-                    if 0 <= i + k < data.shape[0] and 0 <= j + idx < data.shape[1]:
-                        result[i, j] += kernel[k + size, idx + size] * data[i + k, j + idx]
-    return result
-
-# Lagrange interpolation function
-def lagrange_interpolation(x, y, x_new):
-    result = 0
-    for i in range(len(x)):
-        p = 1
-        for j in range(len(x)):
-            if i != j:
-                p *= (x_new - x[j]) / (x[i] - x[j])
-        result += y[i] * p
-    return result
-
-# Numerical differentiation function using Lagrange interpolation
-def numerical_differentiation(x, y):
-    x_new = (x[0] + x[1]) / 2
-    f_x_new = lagrange_interpolation(x, y, x_new)
-    h = x[1] - x[0]
-    return (y[1] - f_x_new) / (h / 2)
+    return scipy.signal.convolve2d(data, kernel, mode='same')
 
 # Function to compute gradient magnitude and direction
 def compute_gradient(data):
-    gradient_magnitude = np.zeros(data.shape)
-    gradient_direction = np.zeros(data.shape)
+    kernel_x = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
+    kernel_y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]])
     
-    for i in range(1, data.shape[0] - 1):
-        for j in range(1, data.shape[1] - 1):
-            x = np.array([j - 1, j, j + 1])
-            y = np.array([data[i, j - 1], data[i, j], data[i, j + 1]])
-            dx = numerical_differentiation(x, y)
-            
-            x = np.array([i - 1, i, i + 1])
-            y = np.array([data[i - 1, j], data[i, j], data[i + 1, j]])
-            dy = numerical_differentiation(x, y)
-            
-            gradient_magnitude[i, j] = np.sqrt(dx**2 + dy**2)
-            gradient_direction[i, j] = np.arctan2(dy, dx)
+    dx = scipy.signal.convolve2d(data, kernel_x, mode='same')
+    dy = scipy.signal.convolve2d(data, kernel_y, mode='same')
+    
+    gradient_magnitude = np.sqrt(dx**2 + dy**2)
+    gradient_direction = np.arctan2(dy, dx)
     
     return gradient_magnitude, gradient_direction
 
 # Function to apply non-maximum suppression
 def non_maximum_suppression(gradient_magnitude, gradient_direction):
     result = np.copy(gradient_magnitude)
+    direction = np.round(gradient_direction * 180 / np.pi / 45) * 45
     
     for i in range(1, gradient_magnitude.shape[0] - 1):
         for j in range(1, gradient_magnitude.shape[1] - 1):
-            angle = gradient_direction[i, j]
+            angle = direction[i, j]
             
-            if (angle >= -np.pi / 8 and angle < np.pi / 8) or \
-               (angle >= 7 * np.pi / 8 and angle < -7 * np.pi / 8):
+            if angle == 0 or angle == 180 or angle == -180:
                 if gradient_magnitude[i, j] < gradient_magnitude[i, j - 1] or \
                    gradient_magnitude[i, j] < gradient_magnitude[i, j + 1]:
                     result[i, j] = 0
-            elif (angle >= np.pi / 8 and angle < 3 * np.pi / 8) or \
-                 (angle >= -7 * np.pi / 8 and angle < -5 * np.pi / 8):
-                if gradient_magnitude[i, j] < gradient_magnitude[i - 1, j + 1] or \
-                   gradient_magnitude[i, j] < gradient_magnitude[i + 1, j - 1]:
+            elif angle == 45 or angle == -135:
+                if gradient_magnitude[i, j] < gradient_magnitude[i - 1, j - 1] or \
+                   gradient_magnitude[i, j] < gradient_magnitude[i + 1, j + 1]:
                     result[i, j] = 0
-            elif (angle >= 3 * np.pi / 8 and angle < 5 * np.pi / 8) or \
-                 (angle >= -5 * np.pi / 8 and angle < -3 * np.pi / 8):
+            elif angle == 90 or angle == -90:
                 if gradient_magnitude[i, j] < gradient_magnitude[i - 1, j] or \
                    gradient_magnitude[i, j] < gradient_magnitude[i + 1, j]:
                     result[i, j] = 0
-            elif (angle >= 5 * np.pi / 8 and angle < 7 * np.pi / 8) or \
-                 (angle >= -3 * np.pi / 8 and angle < -np.pi / 8):
-                if gradient_magnitude[i, j] < gradient_magnitude[i - 1, j - 1] or \
-                   gradient_magnitude[i, j] < gradient_magnitude[i + 1, j + 1]:
+            elif angle == 135 or angle == -45:
+                if gradient_magnitude[i, j] < gradient_magnitude[i - 1, j + 1] or \
+                   gradient_magnitude[i, j] < gradient_magnitude[i + 1, j - 1]:
                     result[i, j] = 0
     
     return result
@@ -102,12 +67,9 @@ def non_maximum_suppression(gradient_magnitude, gradient_direction):
 def double_thresholding(data, low_threshold, high_threshold):
     result = np.zeros(data.shape)
     
-    for i in range(data.shape[0]):
-        for j in range(data.shape[1]):
-            if data[i, j] >= high_threshold:
-                result[i, j] = 255
-            elif data[i, j] >= low_threshold:
-                result[i, j] = 128
+    result[data < low_threshold] = 0
+    result[(data >= low_threshold) & (data < high_threshold)] = 128
+    result[data >= high_threshold] = 255
     
     return result
 
@@ -124,10 +86,7 @@ def hysteresis(data):
                             result[i, j] = 255
                             break
     
-    for i in range(data.shape[0]):
-        for j in range(data.shape[1]):
-            if result[i, j] != 255:
-                result[i, j] = 0
+    result[result != 255] = 0
     
     return result
 
@@ -135,27 +94,18 @@ def hysteresis(data):
 def canny_edge_detector(filename):
     # Read image from file
     data = read_image(filename)
-
-    write_image(data.astype(np.uint8), 'image_read.png')
     
     # Apply Gaussian filter
     data = gaussian_filter(data, 1.4)
-
-    write_image(data.astype(np.uint8), 'gaussian_applied.png')
     
     # Compute gradient magnitude and direction
     gradient_magnitude, gradient_direction = compute_gradient(data)
-
-    write_image(gradient_magnitude.astype(np.uint8), 'grad_magnit.png')
-    write_image(gradient_direction.astype(np.uint8), 'grad_dir.png')
     
     # Apply non-maximum suppression
     gradient_magnitude = non_maximum_suppression(gradient_magnitude, gradient_direction)
-    write_image(gradient_magnitude.astype(np.uint8), 'grad_suppr.png')
     
     # Apply double thresholding
-    gradient_magnitude = double_thresholding(gradient_magnitude, 1, 10)
-    write_image(gradient_magnitude.astype(np.uint8), 'grad_thresh.png')
+    gradient_magnitude = double_thresholding(gradient_magnitude, 50, 150)
     
     # Apply hysteresis
     gradient_magnitude = hysteresis(gradient_magnitude)
